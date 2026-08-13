@@ -63,7 +63,7 @@ uninstall() {
         fi
     done
     info "removing $BIN_DIR/envkey$MODE_BIN"
-    [[ $dry_run -eq 0 ]] && rm -f "$BIN_DIR/envkey"
+    [[ $dry_run -eq 0 ]] && rm -f "$BIN_DIR/envkey" "$BIN_DIR/envkey-backend"
     info "removing $SHARE_DIR$MODE_SHARE"
     [[ $dry_run -eq 0 ]] && rm -rf "$SHARE_DIR"
     info "done. Keychain entries are kept; remove them via Keychain Access if desired."
@@ -77,12 +77,19 @@ info "installing envkey (dry_run=$dry_run)"
 # 1) binary
 [[ $dry_run -eq 0 ]] && mkdir -p "$BIN_DIR"
 if [[ $dry_run -eq 0 ]]; then
-    cp "$SRC_DIR/src/envkey" "$BIN_DIR/envkey"
-    chmod +x "$BIN_DIR/envkey"
+    cp "$SRC_DIR/src/envkey"        "$BIN_DIR/envkey"
+    cp "$SRC_DIR/src/envkey-backend" "$BIN_DIR/envkey-backend"
+    chmod +x "$BIN_DIR/envkey" "$BIN_DIR/envkey-backend"
 else
-    echo "  cp $SRC_DIR/src/envkey -> $BIN_DIR/envkey"
+    echo "  cp src/envkey{,,-backend} -> $BIN_DIR/"
 fi
-info "binary -> $BIN_DIR/envkey$MODE_BIN"
+info "binaries -> $BIN_DIR/envkey, envkey-backend$MODE_BIN"
+
+# Linux 提示后端
+if [[ "$(uname -s)" != "Darwin" ]]; then
+    info "on Linux: storage backend = encrypted file (openssl aes-256)."
+    info "first 'envkey set' will ask for a password and (once) write a keyfile under $HOME/.local/share/envkey/."
+fi
 
 # 2) collect snippets
 [[ $dry_run -eq 0 ]] && mkdir -p "$SHARE_DIR"

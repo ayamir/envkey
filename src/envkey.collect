@@ -5,7 +5,12 @@
 # 本片段不落任何明文密钥。
 
 # 定位 envkey 二进制：优先同目录，其次 PATH
-ENVKEY_BIN="$(command -v envkey 2>/dev/null || echo "$HOME/.local/bin/envkey")"
+ENVKEY_BIN="$(command -v envkey 2>/dev/null)"
+# 定位 envkey-backend：优先与 envkey 同目录，其次 PATH
+ENVKEY_BACKEND_BIN="$(command -v envkey-backend 2>/dev/null)"
+[[ -n "$ENVKEY_BIN" && -z "$ENVKEY_BACKEND_BIN" ]] && ENVKEY_BACKEND_BIN="${ENVKEY_BIN%/*}/envkey-backend"
+ENVKEY_BIN="${ENVKEY_BIN:-$HOME/.local/bin/envkey}"
+ENVKEY_BACKEND_BIN="${ENVKEY_BACKEND_BIN:-$HOME/.local/bin/envkey-backend}"
 ENVKEY_LIST="${ENVKEY_LIST:-$HOME/.config/fish/secret-names}"
 
 envkey() {
@@ -44,7 +49,7 @@ if [[ -f "$ENVKEY_LIST" ]]; then
     while IFS= read -r _envkey_name; do
         [[ -z "$_envkey_name" ]] && continue
         printenv -- "$_envkey_name" >/dev/null 2>&1 && continue
-        _envkey_val="$(security find-generic-password -s "$_envkey_name" -w 2>/dev/null)"
+        _envkey_val="$( "$ENVKEY_BACKEND_BIN" get "$_envkey_name" 2>/dev/null )"
         if [[ -n "$_envkey_val" ]]; then
             export "$_envkey_name=$_envkey_val"
         else

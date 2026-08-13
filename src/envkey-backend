@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+# envkey-backend — 抽象密钥存储后端，供 envkey 主命令调用。
+#
+#   envkey-backend get NAME     读密钥到 stdout（无则退出码1）
+#   envkey-backend set NAME VAL 写密钥
+#   envkey-backend del NAME     删密钥
+#   envkey-backend has NAME     判断存在（退出码0存在/1不存在）
+#   envkey-backend name         打印后端名
+#
+# 后端自动探测：
+#   - Darwin  → macos (security / Keychain)
+#   - Linux   → file  (openssl aes-256-cbc 加密文件)
+#   可用环境变量 ENVKEY_BACKEND=macos|file 强制覆盖。
+#
+# file 后端细节：
+#   - 加密文件: $HOME/.local/share/envkey/secrets.bin (0600)
+#   - 口令来源: ENVKEY_PASS 环境变量 > keyfile(0600) > 交互询问
+#   - 交互设置时若 keyfile 不存在会询问两次并写入 keyfile(0600)，
+#     之后免交互。
+#   - 加密按行存 "NAME=VAL"。
+
+set -u
+umask 077
+
+ENVKEY_BACKEND_FILE="${ENVKEY_BACKEND_FILE:-$HOME/.local/share/envkey/secrets.bin}"
+ENVKEY_BACKEND_KEYFILE="${ENVKEY_BACKEND_KEYFILE:-$HOME/.local/share/envkey/keyfile}"
+
+die() { echo "envkey-backend: $*" >&2; exit 1; }
+
+detect_backend() {
+    [[ -n "${ENVKEY_BACKEND:-}" ]] && { echo "$ENVKEY_BACKEND"; return; }
+    [[ "$(uname -s)" == "Darwin" ]] && echo "macos" || echo "file"
+}
+
+# ---------- macos backend ----------
+macos_get() { security find-generic-password -s "$1" -w 2>/dev/null; }
+macos_set() { security add-generic-password -U -a "$USER" -s "$1" -w "$2" -T /usr/bin/security; }
+macos_del() { security delete-generic-password -s "$1" >/dev/null 2>&1; }
+macos_has() { security find-generic-password -s "$1" >/dev/null 2>&1; }
+
+# ---------- file backend ----------
+file_dir()  { mkdir -p "$(dirname "$ENVKEY_BACKEND_FILE")"; }
+
+file_pw() {
+    # 打印口令到 stdout；失败返回非0。优先 env > keyfile > 询问。
+    local pw
+    if [[ -n "${ENVKEY_PASS:-}" ]]; then printf '%s' "$ENVKEY_PASS"; return; fi
+    if [[ -r "$ENVKEY_BACKEND_KEYFILE" ]]; then cat "$ENVKEY_BACKEND_KEYFILE"; return; fi
+    IFS= read -r -s -p "envkey file-backend password: " pw; echo >&2
+    printf '%s' "$pw"
+}
+
+file_decrypt() {
+    # 解密全部键到 stdout；文件不存在输出空。
+    local pw
+    [[ -s "$ENVKEY_BACKEND_FILE" ]] || return 0
+    pw="$(file_pw)" || return 1
+    openssl enc -d -aes-256-cbc -pbkdf2 -pass "pass:$pw" -in "$ENVKEY_BACKEND_FILE" 2>/dev/null
+}
+
+file_encrypt_write() {
+    # 输入: stdin 每行 "NAME=VAL"。输出: 加密文件。
+    # 若 keyfile 不存在且非 env/pass，则首两次交互设口令并落盘 keyfile。
+    local pw="" confirm=""
+    if [[ -n "${ENVKEY_PASS:-}" ]]; then
+        pw="$ENVKEY_PASS"
+    elif [[ -r "$ENVKEY_BACKEND_KEYFILE" ]]; then
+        pw="$(cat "$ENVKEY_BACKEND_KEYFILE")"
+    else
+        IFS= read -r -s -p "set envkey file-backend password: " pw;          echo >&2
+        IFS= read -r -s -p "confirm envkey file-backend password: " confirm; echo >&2
+        [[ "$pw" == "$confirm" ]] || die "passwords do not match"
+        file_dir && printf '%s' "$pw" > "$ENVKEY_BACKEND_KEYFILE"
+        chmod 600 "$ENVKEY_BACKEND_KEYFILE"
+    fi
+    file_dir
+    openssl enc -aes-256-cbc -pbkdf2 -salt -pass "pass:$pw" -out "$ENVKEY_BACKEND_FILE" 2>/dev/null \
+        || die "encrypt failed"
+    chmod 600 "$ENVKEY_BACKEND_FILE"
+}
+
+file_get() {
+    local name="$1" line
+    while IFS= read -r line; do
+        [[ "$line" == "$name="* ]] && { printf '%s\n' "${line#*=}"; return 0; }
+    done < <(file_decrypt)
+    return 1
+}
+
+file_has() {
+    local name="$1" line
+    while IFS= read -r line; do [[ "$line" == "$name="* ]] && return 0; done < <(file_decrypt)
+    return 1
+}
+
+# 读解密文本到数组
+file_lines() {
+    local IFS=$'\n'
+    file_decrypt
+}
+
+file_set() {
+    local name="$1" val="$2" found=0 line
+    local IFS=$'\n'
+    local lines=()
+    if [[ -s "$ENVKEY_BACKEND_FILE" ]]; then
+        while IFS= read -r line; do
+            if [[ "$line" == "$name="* ]]; then lines+=("$name=$val"); found=1
+            else lines+=("$line"); fi
+        done < <(file_decrypt)
+    fi
+    [[ $found -eq 1 ]] || lines+=("$name=$val")
+    printf '%s\n' "${lines[@]}" | file_encrypt_write
+}
+
+file_del() {
+    local name="$1" line
+    local IFS=$'\n'
+    local lines=()
+    if [[ -s "$ENVKEY_BACKEND_FILE" ]]; then
+        while IFS= read -r line; do
+            [[ "$line" == "$name="* ]] && continue
+            lines+=("$line")
+        done < <(file_decrypt)
+    fi
+    printf '%s\n' "${lines[@]}" | file_encrypt_write
+}
+
+# ---------- dispatch ----------
+backend="$(detect_backend)"
+case "$backend" in
+    macos) get() { macos_get "$1"; }; set() { macos_set "$1" "$2"; }; del() { macos_del "$1"; } ;;
+    file)  get() { file_get "$1"; }; set() { file_set "$1" "$2"; }; del() { file_del "$1"; } ;;
+    *) die "unknown backend: $backend" ;;
+esac
+# has 统一
+has() { backend="$backend"; case "$backend" in macos) macos_has "$1";; file) file_has "$1";; esac; }
+
+op="${1:-}"
+case "$op" in
+    name) echo "$backend" ;;
+    get)  shift; get "$1" ;;
+    set)  shift; set "${1:-}" "${2:-}" ;;
+    del)  shift; del "${1:-}" ;;
+    has)  shift; has "$1"; exit $? ;;
+    *) die "usage: envkey-backend get|set|del|has|name [args]" ;;
+esac

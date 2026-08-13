@@ -1,8 +1,25 @@
-# envkey — 经 macOS Keychain 安全管理密钥，透明注入各 shell
+# envkey — 安全存储密钥并透明注入各 shell 环境（macOS / Linux）
 
-把 API 密钥 / 凭据安全存进 macOS 登录钥匙串（Keychain），并让 bash / zsh / fish
-三个 shell 在启动时自动加载为环境变量。**磁盘上只写「变量名清单」，真值只存
-Keychain，明文密钥永不落盘。**
+把 API 密钥 / 凭据安全存储，并让 bash / zsh / fish 在启动时自动加载为环境变量。
+**磁盘上只写「变量名清单」，真实值存密钥后端，明文永不落盘。**
+
+## 平台与后端
+
+存储后端由 `envkey-backend` 自动探测，命令行与 shell 接线完全一致：
+
+| 平台 | 后端 | 存储位置 | 依赖 |
+|---|---|---|---|
+| macOS | `macos` | 登录 Keychain（受系统保护） | 只需 `security`（自带） |
+| Linux | `file` | openssl aes-256-cbc 加密文件 `~/.local/share/envkey/secrets.bin` (0600) | 只需 `openssl` |
+
+可用 `ENVKEY_BACKEND=macos|file` 强制指定。
+
+### Linux file 后端（加密文件）说明
+
+- 加密文件 `~/.local/share/envkey/secrets.bin`，权限 0600
+- 口令来源优先级：`ENVKEY_PASS` 环境变量 > `~/.local/share/envkey/keyfile` (0600) > 交互询问
+- 首次 `envkey set` 会要求设定口令，并（无口令文件时）询问两次后写入 `keyfile`（0600），之后可免交互
+- 适合 headless 服务器 / CI / 容器；安全性取决于口令强度 + 文件权限
 
 ## 特性
 
@@ -35,15 +52,16 @@ envkey set MY_KEY [value]   # 存/改；不带 value 则交互输入（不回显
 envkey del MY_KEY           # 删
 envkey list                 # 看清单（只有名字）
 envkey export MY_KEY        # 打印 "export MY_KEY=..."，可 eval 注入当前会话
+envkey backend              # 打印当前存储后端 (macos|file)
 ```
 
 `set` / `del` 后**当前会话立即生效**；后续新终端由启动文件自动加载。
 
 ## 安全模型
 
-- 真值（value）只存在于 macOS Keychain，`security` 加密存储
+- macOS 真实值存于系统 Keychain；Linux 存于 openssl 加密文件（0600）
 - 磁盘上只有 `secret-names`：纯变量名列表，无任何明文值
-- 各 shell 启动时逐条从 Keychain 读出并 `export`，`printenv` 已存在则跳过
+- 各 shell 启动时逐条从后端读出并 `export`，`printenv` 已存在则跳过
 - 启动文件中的接线块不含密钥，提交 git 也无泄露风险
 
 ## 迁移 / 多机使用
@@ -53,32 +71,34 @@ envkey export MY_KEY        # 打印 "export MY_KEY=..."，可 eval 注入当前
 ```bash
 # 新机器上
 git clone <repo-url> 或 scp -r envkey user@host:~
-cd envkey && ./install.sh
-# 逐个重新填入密钥值（值存落到新机 Keychain）
+cd envkey && ./install.sh          # 自动探测平台与后端
+# 逐个重新填入密钥值（存落到新机后端）
 envkey set CODE_COMPANION_KEY
 envkey set AIDEN_NOTIFY_FEISHU_WEBHOOK_URL
 envkey set AIDEN_NOTIFY_FEISHU_SECRET
+# Linux 首次 set 会先设置加密文件口令
 ```
 
 > 想预置"该有哪些变量"而不填值：安装后在 `~/.config/fish/secret-names`
-> 里逐行写下变量名即可，启动时若 Keychain 无值会给出提示。
+> 里逐行写下变量名即可，启动时若后端无值会给出提示。
 
 ## 目录结构
 
 ```
 envkey/
-├── install.sh               # 安装/卸载（可分发）
+├── install.sh               # 安装/卸载（可分发，自动探测平台）
 ├── README.md
 └── src/
-    ├── envkey               # 核心命令（Keychain 读写 + 清单管理）
+    ├── envkey               # 核心命令（后端无关）
+    ├── envkey-backend       # 存储后端抽象 (macos/security | file/openssl)
     ├── envkey.collect       # bash/zsh 启动片段
     └── envkey.collect.fish  # fish 启动片段
 ```
 
 ## 排错
 
-- **set 提示 authorization canceled**：`security` 需要 macOS 图形授权弹窗，
-  在无 GUI 的纯 ssh/后台会话里会失败。用真实终端跑即可。
-- **启动时 warning keychain item not found**：清单里有名字但 Keychain 无值，
+- **macOS set 提示 authorization canceled**：`security` 需要 macOS 图形授权弹窗，
+  在无 GUI 的纯 ssh/后台会话里会失败。用真实终端跑即可（Linux file 后端无此限制）。
+- **启动时 warning keychain item not found**：清单里有名字但后端无值，
   用 `envkey set NAME <value>` 补上。
 - **PATH 里找不到 envkey**：确认 `~/.local/bin` 已在 `$PATH`。

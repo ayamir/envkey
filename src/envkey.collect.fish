@@ -51,7 +51,7 @@ end
 if test -f $_envkey_list
     while read -l _envkey_name
         if test -n "$_envkey_name"; and not set -q $_envkey_name
-            set -l _val (security find-generic-password -s $_envkey_name -w 2>/dev/null)
+            set -l _val (~/.local/bin/envkey-backend get $_envkey_name 2>/dev/null)
             if test -n "$_val"
                 set -gx $_envkey_name $_val
             else
