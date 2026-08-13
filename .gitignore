@@ -1,0 +1,19 @@
+# 安全: 绝不提交任何密钥真实值
+# 真实值只存 macOS Keychain 或本地 openssl 加密文件，不落 git。
+
+# envkey 运行期生成物（本地密钥存储/口令，只在本机，不可入库）
+envkey.secrets.bin
+envkey.keyfile
+secrets.bin
+keyfile
+*.secrets.bin
+*.keyfile
+
+# 各机器专属的 secret-names 清单（含真实变量名，虽无值也建议不入库）
+.config/fish/secret-names
+
+# 临时/备份
+*.bak
+*.bak1
+*.bak2
+*.DS_Store
