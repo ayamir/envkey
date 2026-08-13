@@ -4,27 +4,23 @@
 
 # 函数体内用绝对路径、变量名加前缀避免与用户变量冲突
 set -gx _envkey_list ~/.config/fish/secret-names
+set -g _envkey_bin (command -v envkey; or echo ~/.local/bin/envkey)
+set -g _envkey_backend (command -v envkey-backend; or echo ~/.local/bin/envkey-backend)
 
 function envkey -d "Manage secrets stored in macOS Keychain"
-    set -l bin ~/.local/bin/envkey
+    set -l bin $_envkey_bin
+    set -l backend $_envkey_backend
     switch "$argv[1]"
         case set
             set -l name $argv[2]
             if test -z "$name"
-                echo "usage: envkey set NAME [VALUE]" >&2
+                echo "usage: envkey set NAME [--from-stdin]" >&2
                 return 1
             end
-            set -l val $argv[3]
-            if test -z "$val"
-                read -s -P "value for $name: " val
-                echo "" >&2
-            end
-            if test -z "$val"
-                echo "envkey: empty value, abort" >&2
-                return 1
-            end
-            $bin set "$name" "$val"
-            set -gx $name $val
+            # 透传给真实命令（交互/管道输入），完成后从后端读回注入当前 shell
+            $bin set $argv[2..-1]
+            or return $status
+            set -gx $name ($backend get $name 2>/dev/null)
         case del
             set -l name $argv[2]
             if test -z "$name"
@@ -53,7 +49,7 @@ end
 if test -f $_envkey_list
     while read -l _envkey_name
         if test -n "$_envkey_name"; and not set -q $_envkey_name
-            set -l _val (~/.local/bin/envkey-backend get $_envkey_name 2>/dev/null)
+            set -l _val ($_envkey_backend get $_envkey_name 2>/dev/null)
             if test -n "$_val"
                 set -gx $_envkey_name $_val
             else

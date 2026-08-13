@@ -48,13 +48,17 @@
 ## 用法
 
 ```bash
-envkey set MY_KEY [value]   # 存/改；不带 value 则交互输入（不回显）
-envkey del MY_KEY           # 删
-envkey list                 # 看清单（只有名字）
-envkey export MY_KEY        # 打印 "export MY_KEY=..."，可 eval 注入当前会话
-envkey backend              # 打印当前存储后端 (macos|file)
-envkey redact [--dry-run]   # 抹掉 shell 历史中残留的明文密钥值（见下）
+envkey set MY_KEY                 # 存/改：交互输入，不回显，绝不进 shell 历史
+cmd | envkey set MY_KEY --from-stdin  # 从管道读值（脚本/ pass 输出），同样不进历史
+envkey del MY_KEY                 # 删
+envkey list                       # 看清单（只有名字）
+envkey export MY_KEY              # 打印 "export MY_KEY=..."，可 eval 注入当前会话
+envkey backend                    # 打印当前存储后端 (macos|file)
+envkey redact [--dry-run]         # 抹掉 shell 历史中残留的明文密钥值（见下）
 ```
+
+> **安全设计**：`set` 的密钥值**绝不通过命令行参数传入**（那会落进 shell 历史与
+> 进程参数表 `ps`）。默认交互 `read -s` 不回显；脚本化用 `--from-stdin` 从管道读取。
 
 `set` / `del` 后**当前会话立即生效**；后续新终端由启动文件自动加载。
 
@@ -118,5 +122,5 @@ envkey/
 - **macOS set 提示 authorization canceled**：`security` 需要 macOS 图形授权弹窗，
   在无 GUI 的纯 ssh/后台会话里会失败。用真实终端跑即可（Linux file 后端无此限制）。
 - **启动时 warning keychain item not found**：清单里有名字但后端无值，
-  用 `envkey set NAME <value>` 补上。
+  用 `envkey set NAME`（交互输入）或 `cmd | envkey set NAME --from-stdin` 补上。
 - **PATH 里找不到 envkey**：确认 `~/.local/bin` 已在 `$PATH`。

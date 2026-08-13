@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # envkey — 安全存储密钥/凭据并透明注入各 shell 环境。
 #
-#   envkey set NAME [VALUE]   存入后端并加入启动名单（不带 VALUE 则交互输入，不回显）
+#   envkey set NAME [--from-stdin]   存入后端并加入启动名单；值交互/管道输入，绝不落历史
 #   envkey del NAME           从后端和启动名单中删除
 #   envkey list               列出启动名单里的变量名（真实值不落盘明文）
 #   envkey export NAME        stdout 打印 "export NAME=v"，供 eval 注入当前会话
@@ -21,12 +21,31 @@ die() { echo "envkey: $*" >&2; exit 1; }
 warn() { echo "envkey: $*" >&2; }
 
 cmd_set() {
-    local name="$1" val="${2:-}"
-    [[ -z "$name" ]] && die "usage: envkey set NAME [VALUE]"
-    if [[ -z "$val" ]]; then
-        IFS= read -r -s -p "value for $name: " val
+    # 新用法：envkey set NAME  [--from-stdin]
+    # 值绝不经命令行参数传入（避免进 shell 历史/进程参数表）。
+    # 默认交互输入（read -s 不回显）；--from-stdin 从 stdin 读（适合脚本/管道）。
+    local name="$1" src="prompt" val="" tmp=""
+    shift
+    [[ -z "$name" ]] && die "usage: envkey set NAME [--from-stdin]"
+
+    for a in "$@"; do
+        case "$a" in
+            --from-stdin) src="stdin" ;;
+            *) die "unknown option for set: $a (use --from-stdin, or omit value)" ;;
+        esac
+    done
+
+    if [[ "$src" == "stdin" ]]; then
+        # 从 stdin 读取（不留历史，不进参数表）
+        if [[ -t 0 ]]; then
+            die "--from-stdin: 请通过管道提供值（如: cmd | envkey set $name --from-stdin）"
+        fi
+        val="$(cat)"   # $() 剥离末尾换行
+    else
+        IFS= read -r -s -p "value for $name (不会写入历史): " val
         echo >&2
     fi
+
     [[ -z "$val" ]] && die "envkey: empty value, abort"
     "$ENVKEY_HOME/envkey-backend" set "$name" "$val" || die "backend write failed"
     mkdir -p "$(dirname "$ENVKEY_LIST")"
@@ -42,7 +61,9 @@ cmd_del() {
     "$ENVKEY_HOME/envkey-backend" del "$name"
     if [[ -f "$ENVKEY_LIST" ]]; then
         local tmp; tmp="$(mktemp)"
-        grep -vx -- "$name" "$ENVKEY_LIST" > "$tmp" && mv "$tmp" "$ENVKEY_LIST" || rm -f "$tmp"
+        # grep -vx 删光后输出空会返回非0，需无条件 mv 覆盖
+        grep -vx -- "$name" "$ENVKEY_LIST" > "$tmp" 2>/dev/null
+        mv "$tmp" "$ENVKEY_LIST"
     fi
     echo "envkey: removed $name" >&2
 }
@@ -66,7 +87,7 @@ cmd_export() {
 # 交互式 set（不带 value）不会把值写进历史，无需处理。
 cmd_redact() {
     # 抹掉 shell 历史中的密钥实际值（占位 ENVREDACTED）。覆盖两类：
-    #   1) envkey set NAME <value>            → 抹 value
+    #   1) envkey set NAME <value>            → 抹 value（历史中已不应用新用法出现，支持旧格式回清）
     #   2) 直接出现的明文密钥 export K=v / K=token
     #      （sk-, ghp_, AKIA..., ya29., xox…, 及 key=/token=/secret=/password= 后跟长串）
     # 兼容 bash/zsh 行式与 fish 的“- cmd:”块式。只改确有匹配的文件，改前备份 .redact.bak。
@@ -147,6 +168,6 @@ case "${1:-}" in
     backend) shift; "$ENVKEY_HOME/envkey-backend" name ;;
     redact)  shift; cmd_redact "$@" ;;
     *)
-        echo "usage: envkey set NAME [VALUE] | envkey del NAME | envkey list | envkey export NAME | envkey backend | envkey redact [--dry-run]" >&2
+        echo "usage: envkey set NAME [--from-stdin] | envkey del NAME | envkey list | envkey export NAME | envkey backend | envkey redact [--dry-run]" >&2
         exit 1 ;;
 esac

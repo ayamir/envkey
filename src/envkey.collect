@@ -14,19 +14,15 @@ ENVKEY_BACKEND_BIN="${ENVKEY_BACKEND_BIN:-$HOME/.local/bin/envkey-backend}"
 ENVKEY_LIST="${ENVKEY_LIST:-$HOME/.config/fish/secret-names}"
 
 envkey() {
-    local sub="$1" name val
+    local sub="$1" name
     case "$sub" in
         set)
             name="${2:-}"
-            [[ -z "$name" ]] && { echo "usage: envkey set NAME [VALUE]" >&2; return 1; }
-            val="${3:-}"
-            if [[ -z "$val" ]]; then
-                IFS= read -r -s -p "value for $name: " val
-                echo >&2
-            fi
-            [[ -z "$val" ]] && { echo "envkey: empty value, abort" >&2; return 1; }
-            "$ENVKEY_BIN" set "$name" "$val"
-            export "$name=$val"
+            [[ -z "$name" ]] && { echo "usage: envkey set NAME [--from-stdin]" >&2; return 1; }
+            shift 2
+            # 交互/stdin 由真实命令处理；完成后从后端读回，注入当前 shell
+            "$ENVKEY_BIN" set "$name" "$@" || return $?
+            export "$name=$("${ENVKEY_BACKEND_BIN:-$HOME/.local/bin/envkey-backend}" get "$name" 2>/dev/null)"
             ;;
         del)
             name="${2:-}"
