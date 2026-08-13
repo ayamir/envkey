@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# envkey.collect — bash/zsh 启动时 source：定义 envkey 函数 + 从 Keychain 加载密钥
+# 文件位置（由 install.sh 放置）：$HOME/.local/share/envkey/envkey.collect
+# bash: source ~/.bash_profile 内; zsh: source ~/.zshrc 内
+# 本片段不落任何明文密钥。
+
+# 定位 envkey 二进制：优先同目录，其次 PATH
+ENVKEY_BIN="$(command -v envkey 2>/dev/null || echo "$HOME/.local/bin/envkey")"
+ENVKEY_LIST="${ENVKEY_LIST:-$HOME/.config/fish/secret-names}"
+
+envkey() {
+    local sub="$1" name val
+    case "$sub" in
+        set)
+            name="${2:-}"
+            [[ -z "$name" ]] && { echo "usage: envkey set NAME [VALUE]" >&2; return 1; }
+            val="${3:-}"
+            if [[ -z "$val" ]]; then
+                IFS= read -r -s -p "value for $name: " val
+                echo >&2
+            fi
+            [[ -z "$val" ]] && { echo "envkey: empty value, abort" >&2; return 1; }
+            "$ENVKEY_BIN" set "$name" "$val"
+            export "$name=$val"
+            ;;
+        del)
+            name="${2:-}"
+            [[ -z "$name" ]] && { echo "usage: envkey del NAME" >&2; return 1; }
+            "$ENVKEY_BIN" del "$name"
+            unset "$name" 2>/dev/null
+            ;;
+        list) "$ENVKEY_BIN" list ;;
+        export)
+            name="${2:-}"
+            [[ -z "$name" ]] && { echo "usage: envkey export NAME" >&2; return 1; }
+            eval "$("$ENVKEY_BIN" export "$name")"
+            ;;
+        *) echo "usage: envkey set/del/list/export" >&2 ;;
+    esac
+}
+
+# 启动时按名单加载已有密钥（printenv 判断“已在环境中则跳过”，bash/zsh 均兼容）
+if [[ -f "$ENVKEY_LIST" ]]; then
+    while IFS= read -r _envkey_name; do
+        [[ -z "$_envkey_name" ]] && continue
+        printenv -- "$_envkey_name" >/dev/null 2>&1 && continue
+        _envkey_val="$(security find-generic-password -s "$_envkey_name" -w 2>/dev/null)"
+        if [[ -n "$_envkey_val" ]]; then
+            export "$_envkey_name=$_envkey_val"
+        else
+            echo "warning: keychain item '$_envkey_name' not found; run: envkey set $_envkey_name <value>" >&2
+        fi
+    done < "$ENVKEY_LIST"
+fi

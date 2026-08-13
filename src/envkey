@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# envkey — 把密钥/凭据安全存进 macOS Keychain，透明注入各 shell 环境。
+#
+#   envkey set NAME [VALUE]   存入 Keychain 并加入启动名单（不带 VALUE 则交互输入，不回显）
+#   envkey del NAME           从 Keychain 和启动名单中删除
+#   envkey list               列出启动名单里的变量名（真值不落盘，只存 名）
+#   envkey export NAME        stdout 打印 "export NAME=v"，供 eval 注入当前会话
+#
+# 真值只存 macOS Keychain；磁盘上只写一份「名单」（变量名）。明文密钥永不落盘。
+# 使用前提：已经安装（见配套 install.sh / README）。
+
+ENVKEY_LIST="${ENVKEY_LIST:-$HOME/.config/fish/secret-names}"
+
+die() { echo "$*" >&2; exit 1; }
+
+cmd_set() {
+    local name="$1" val="${2:-}"
+    [[ -z "$name" ]] && die "usage: envkey set NAME [VALUE]"
+    if [[ -z "$val" ]]; then
+        IFS= read -r -s -p "value for $name: " val
+        echo >&2
+    fi
+    [[ -z "$val" ]] && die "envkey: empty value, abort"
+    security add-generic-password -U -a "$USER" -s "$name" -w "$val" -T /usr/bin/security \
+        || die "envkey: keychain write failed"
+    if ! grep -qxF -- "$name" "$ENVKEY_LIST" 2>/dev/null; then
+        echo "$name" >> "$ENVKEY_LIST"
+    fi
+    echo "envkey: stored $name (len ${#val})" >&2
+}
+
+cmd_del() {
+    local name="$1"
+    [[ -z "$name" ]] && die "usage: envkey del NAME"
+    security delete-generic-password -s "$name" >/dev/null 2>&1
+    if [[ -f "$ENVKEY_LIST" ]]; then
+        local tmp; tmp="$(mktemp)"
+        grep -vx -- "$name" "$ENVKEY_LIST" > "$tmp" && mv "$tmp" "$ENVKEY_LIST" || rm -f "$tmp"
+    fi
+    echo "envkey: removed $name" >&2
+}
+
+cmd_list() {
+    [[ -f "$ENVKEY_LIST" ]] && cat "$ENVKEY_LIST" || echo "(no secrets configured)"
+}
+
+cmd_export() {
+    local name="$1"; [[ -z "$name" ]] && die "usage: envkey export NAME"
+    local val; val="$(security find-generic-password -s "$name" -w 2>/dev/null)"
+    [[ -z "$val" ]] && die "envkey: '$name' not found in keychain"
+    printf 'export %s=%q\n' "$name" "$val"
+}
+
+cmd_uninstall() {
+    # 反安装：删除安装的文件 + 启动接线标记。密钥本身保留在 Keychain。
+    echo "envkey: not implemented as separate subcommand; run the bundled uninstall.sh" >&2
+    exit 1
+}
+
+case "${1:-}" in
+    set)    shift; cmd_set "$@" ;;
+    del)    shift; cmd_del "$@" ;;
+    list)   shift; cmd_list "$@" ;;
+    export) shift; cmd_export "$@" ;;
+    uninstall) shift; cmd_uninstall "$@" ;;
+    *)
+        echo "usage: envkey set NAME [VALUE] | envkey del NAME | envkey list | envkey export NAME" >&2
+        exit 1 ;;
+esac

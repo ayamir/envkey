@@ -1,0 +1,62 @@
+# envkey.collect.fish — fish 启动时 source：定义 envkey 函数 + 从 Keychain 加载密钥
+# 文件位置（由 install.sh 放置）：$HOME/.local/share/envkey/envkey.collect.fish
+# 引用：source ~/.config/fish/config.fish 内。不落任何明文密钥。
+
+# 函数体内用绝对路径、变量名加前缀避免与用户变量冲突
+set -gx _envkey_list ~/.config/fish/secret-names
+
+function envkey -d "Manage secrets stored in macOS Keychain"
+    set -l bin ~/.local/bin/envkey
+    switch "$argv[1]"
+        case set
+            set -l name $argv[2]
+            if test -z "$name"
+                echo "usage: envkey set NAME [VALUE]" >&2
+                return 1
+            end
+            set -l val $argv[3]
+            if test -z "$val"
+                read -s -P "value for $name: " val
+                echo "" >&2
+            end
+            if test -z "$val"
+                echo "envkey: empty value, abort" >&2
+                return 1
+            end
+            $bin set "$name" "$val"
+            set -gx $name $val
+        case del
+            set -l name $argv[2]
+            if test -z "$name"
+                echo "usage: envkey del NAME" >&2
+                return 1
+            end
+            $bin del "$name"
+            set -q $name; and set -e $name
+        case list
+            $bin list
+        case export
+            set -l name $argv[2]
+            if test -z "$name"
+                echo "usage: envkey export NAME" >&2
+                return 1
+            end
+            eval ($bin export "$name")
+        case '*'
+            echo "usage: envkey set/del/list/export" >&2
+    end
+end
+
+# 启动时按名单加载已有密钥
+if test -f $_envkey_list
+    while read -l _envkey_name
+        if test -n "$_envkey_name"; and not set -q $_envkey_name
+            set -l _val (security find-generic-password -s $_envkey_name -w 2>/dev/null)
+            if test -n "$_val"
+                set -gx $_envkey_name $_val
+            else
+                echo "warning: keychain item '$_envkey_name' not found; run: envkey set $_envkey_name <value>" >&2
+            end
+        end
+    end < $_envkey_list
+end
