@@ -18,6 +18,7 @@ ENVKEY_LIST="${ENVKEY_LIST:-$HOME/.config/fish/secret-names}"
 ENVKEY_HOME="$(cd "$(dirname "$0")" && pwd)"
 
 die() { echo "envkey: $*" >&2; exit 1; }
+warn() { echo "envkey: $*" >&2; }
 
 cmd_set() {
     local name="$1" val="${2:-}"
@@ -60,13 +61,92 @@ cmd_export() {
     printf 'export %s=%q\n' "$name" "$val"
 }
 
+# 历史文件中把 `envkey set <NAME> <value>` 的值抹掉（占位 ENVREDACTED）。
+# 三种历史格式兼容：bash(zsh) 行式、fish 的 "- cmd:" 块式。
+# 交互式 set（不带 value）不会把值写进历史，无需处理。
+cmd_redact() {
+    # 抹掉 shell 历史中的密钥实际值（占位 ENVREDACTED）。覆盖两类：
+    #   1) envkey set NAME <value>            → 抹 value
+    #   2) 直接出现的明文密钥 export K=v / K=token
+    #      （sk-, ghp_, AKIA..., ya29., xox…, 及 key=/token=/secret=/password= 后跟长串）
+    # 兼容 bash/zsh 行式与 fish 的“- cmd:”块式。只改确有匹配的文件，改前备份 .redact.bak。
+    # 误伤控制：仅当“= 后跟已知 token 形态或敏感键名+长随机串”才替换；URL、hash、普通值不碰。
+    local a f out rc bak
+    local dry_run=0 found=0
+    files=()
+
+    for a in "$@"; do
+        case "$a" in
+            --dry-run) dry_run=1 ;;
+            -*) die "unknown option: $a" ;;
+            *) files+=("$a") ;;
+        esac
+    done
+
+    if [[ ${#files[@]} -eq 0 ]]; then
+        files=( "$HOME/.bash_history" "$HOME/.zsh_history" "$HOME/.local/share/fish/fish_history" )
+    fi
+
+    for f in "${files[@]}"; do
+        [[ -f "$f" ]] || { warn "skip (not found): $f"; continue; }
+
+        # perl 脚本用单引号直接传，避免 bash 展开其内部 $ 变量
+        out="$(perl -e '
+my $f = shift;
+open my $fh,"<",$f or die $!;
+my $m = 0;
+my $R = "ENVREDACTED";
+my @red = (
+    qr/sk-[A-Za-z0-9_-]{16,64}/,
+    qr/gh[persu]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}/i,
+    qr/glpat-[A-Za-z0-9_-]{16,}/,
+    qr/(?:AKIA|ASIA)[A-Z0-9]{16}/,
+    qr/ya29\.[A-Za-z0-9_-]{8,}/,
+    qr/xox[baprs]-[A-Za-z0-9-]{6,}/i,
+    qr/AIza[A-Za-z0-9_-]{30,40}/,
+);
+my $keyre = qr/(?:key|token|secret|pass|password|api[_-]?key|client[_-]?secret|refresh[_-]?token|access[_-]?token|DS?_KEY)_?[A-Za-z0-9_]*/i;
+while(my $l = <$fh>){
+    $l =~ s/(envkey[ \t]+set[ \t]+[^ \t\n;]+[ \t]+)[^ \t\n;]+/$1$R/;
+    for my $re (@red){
+        $l =~ s/$re/$R/g;
+    }
+    # 仅 shell 赋值上下文：键名前非字母数字/URL 分隔符；值不含 . / 等路径特征（避免 key_name=路径 误伤）
+    $l =~ s/((?<![A-Za-z0-9_?.&])$keyre[ \t]*=)[A-Za-z0-9_\-+]{20,}/$1$R/g;
+    $m = 1 if $l =~ /ENVREDACTED/;
+    print $l;
+}
+close $fh;
+exit($m?0:1);
+' "$f")"
+        rc=$?
+
+        if [[ $rc -eq 0 ]]; then
+            found=1
+            if [[ $dry_run -eq 0 ]]; then
+                bak="$f.redact.bak"
+                cp "$f" "$bak"
+                printf '%s' "$out" > "$f"
+                echo "envkey: redacted $f (backup: $bak)" >&2
+            else
+                echo "envkey: [dry-run] would redact $f:" >&2
+                printf '%s' "$out" | grep -n "ENVREDACTED" | sed -E "s/^([0-9]+)/  line \1/" >&2
+            fi
+        fi
+        unset out rc
+    done
+
+    [[ $found -eq 0 ]] && echo "envkey: no secrets found in history" >&2
+}
+
 case "${1:-}" in
     set)     shift; cmd_set "$@" ;;
     del)     shift; cmd_del "$@" ;;
     list)    shift; cmd_list "$@" ;;
     export)  shift; cmd_export "$@" ;;
     backend) shift; "$ENVKEY_HOME/envkey-backend" name ;;
+    redact)  shift; cmd_redact "$@" ;;
     *)
-        echo "usage: envkey set NAME [VALUE] | envkey del NAME | envkey list | envkey export NAME | envkey backend" >&2
+        echo "usage: envkey set NAME [VALUE] | envkey del NAME | envkey list | envkey export NAME | envkey backend | envkey redact [--dry-run]" >&2
         exit 1 ;;
 esac

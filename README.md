@@ -53,9 +53,27 @@ envkey del MY_KEY           # 删
 envkey list                 # 看清单（只有名字）
 envkey export MY_KEY        # 打印 "export MY_KEY=..."，可 eval 注入当前会话
 envkey backend              # 打印当前存储后端 (macos|file)
+envkey redact [--dry-run]   # 抹掉 shell 历史中残留的明文密钥值（见下）
 ```
 
 `set` / `del` 后**当前会话立即生效**；后续新终端由启动文件自动加载。
+
+### envkey redact — 清理 shell 历史中的密钥
+
+扫描 `~/.bash_history`、`~/.zsh_history`、fish `fish_history`，把其中的密钥实际值
+替换为 `ENVREDACTED`（改前先备份到 `*.redact.bak`）：
+
+```bash
+envkey redact --dry-run          # 先预览会改哪些，不实际写入
+envkey redact                    # 实际清理默认的三个历史文件
+envkey redact /path/to/hist      # 也可显式指定文件
+```
+
+覆盖两类泄露：`envkey set NAME value` 的值，以及直接出现在历史里的明文密钥
+（如 `export DS_KEY=sk-...`、`export PG_PASSWORD=...`、`export AWS_ACCESS_KEY_ID=AKIA...`）。
+误伤控制：只在键名意为敏感项（key/token/secret/password 等）且值为疑似 token 形态
+（`sk-`/`ghp_`/`AKIA`/`ya29`/`xox…` 或 20+ 位随机串）时替换，URL、路径、普通值不碰。
+> 注意：redact 不能抹掉已同步到云/备份里的历史，建议立即轮换泄露的密钥。
 
 ## 安全模型
 
