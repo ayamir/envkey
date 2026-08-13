@@ -35,6 +35,7 @@ envkey() {
             unset "$name" 2>/dev/null
             ;;
         list) "$ENVKEY_BIN" list ;;
+        backend) "$ENVKEY_BIN" backend ;;
         export)
             name="${2:-}"
             [[ -z "$name" ]] && { echo "usage: envkey export NAME" >&2; return 1; }

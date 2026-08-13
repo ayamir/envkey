@@ -35,6 +35,8 @@ function envkey -d "Manage secrets stored in macOS Keychain"
             set -q $name; and set -e $name
         case list
             $bin list
+        case backend
+            $bin backend
         case export
             set -l name $argv[2]
             if test -z "$name"
